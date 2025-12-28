@@ -235,4 +235,3 @@ print("==============================================");
 print("WARNING: This is a VULNERABLE MongoDB instance!");
 print("For CVE-2025-14847 testing only!");
 print("==============================================");
-
