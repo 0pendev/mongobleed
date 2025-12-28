@@ -73,6 +73,12 @@ docker-compose up -d
 python3 mongobleed.py
 ```
 
+A kubernetes deployment is included to spin up a vulnerable MongoDB instance:
+```bash
+podman kube play mongodb.yaml
+python3 mongobleed.py
+```
+
 ## How It Works
 
 The exploit crafts BSON documents with inflated length fields. When the server parses these documents, it reads field names from uninitialized memory until it hits a null byte. Each probe at a different offset can leak different memory regions.
@@ -96,4 +102,3 @@ Joe Desimone - [x.com/dez_](https://x.com/dez_)
 ## Disclaimer
 
 This tool is for authorized security testing only. Unauthorized access to computer systems is illegal.
-
