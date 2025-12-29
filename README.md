@@ -79,6 +79,14 @@ podman kube play mongodb.yaml
 python3 mongobleed.py
 ```
 
+## TLS Reverse Proxy
+
+The example pod now exposes MongoDB through a TLS reverse proxy that self-generates a certificate on startup. The proxy listens on `27017` with TLS and forwards traffic to the internal mongod instance on localhost.
+
+- Certificate: self-signed, regenerated at pod start (stored in an in-memory volume)
+- Client example: `mongosh --host localhost --port 27071 --tls --tlsAllowInvalidCertificates`
+- Direct, non-TLS access is limited to the pod network; external access should go through the TLS endpoint.
+
 ## How It Works
 
 The exploit crafts BSON documents with inflated length fields. When the server parses these documents, it reads field names from uninitialized memory until it hits a null byte. Each probe at a different offset can leak different memory regions.

@@ -30,6 +30,46 @@ spec:
           subPath: init-mongo.js
         - name: mongo-data
           mountPath: /data/db
+    - name: mongo-tls-proxy
+      image: docker.io/nginx:1.27-alpine
+      ports:
+        - containerPort: 27071
+          hostPort: 27071
+      volumeMounts:
+        - name: mongo-tls
+          mountPath: /certs
+      command:
+        - /bin/sh
+        - -c
+        - |
+          set -euo pipefail
+          apk add --no-cache openssl 2>&1 >/dev/null
+          CERT_DIR=/certs
+          mkdir -p "${CERT_DIR}"
+          if [ ! -f "${CERT_DIR}/server.key" ]; then
+            openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+              -keyout "${CERT_DIR}/server.key" \
+              -out "${CERT_DIR}/server.crt" \
+              -subj "/CN=localhost" 2>&1 > /dev/null
+          fi
+          cat > /etc/nginx/nginx.conf <<'EOF'
+          events { worker_connections 1024; }
+          stream {
+            log_format proxy '$remote_addr:$remote_port -> $server_addr:$server_port '
+                             '$protocol $status $bytes_sent/$bytes_received $session_time';
+            access_log /dev/stdout proxy;
+            error_log  /dev/stderr info;
+            upstream mongo_backend { server 127.0.0.1:27017; }
+            server {
+              listen 0.0.0.0:27071 ssl;
+              proxy_pass mongo_backend;
+              ssl_protocols TLSv1.2 TLSv1.3;
+              ssl_certificate /certs/server.crt;
+              ssl_certificate_key /certs/server.key;
+            }
+          }
+          EOF
+          exec nginx -g 'daemon off;'
   volumes:
     - name: mongo-init
       hostPath:
@@ -39,3 +79,5 @@ spec:
       hostPath:
         path: ./mongodb_data
         type: DirectoryOrCreate
+    - name: mongo-tls
+      emptyDir: {}

